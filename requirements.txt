@@ -1,0 +1,6 @@
+# file: requirements.txt
+torch
+numpy
+tqdm
+scikit-image
+matplotlib
