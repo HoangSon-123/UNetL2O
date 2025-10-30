@@ -12,30 +12,30 @@ import config
 from dataset import get_dataloaders
 from utils import load_checkpoint, display_model_outputs, set_seed
 
-# Import các mô hình
-from model import*
+# Import models
+from model import *
 
 
 def build_model(A, device):
-    """Tự động khởi tạo model theo config.MODEL_TYPE"""
+    """Automatically initialize the model according to config.MODEL_TYPE"""
     model_type = config.MODEL_TYPE.lower()
 
     if model_type == "tvm":
-        print("🔧 Sử dụng CT_TVM_Model")
+        print("Using CT_TVM_Model")
         model = CT_TVM_Model(A=A).to(device)
 
     elif model_type == "ffpn":
-        print("🔧 Sử dụng CT_FFPN_Model")
+        print("Using CT_FFPN_Model")
         S = torch.diag(torch.count_nonzero(A, dim=0) ** -1.0).float().to(device)
         model = CT_FFPN_Model(S=S, A=A).to(device)
 
     elif model_type == "unet":
-        print("🔧 Sử dụng CT_UNet_Model")
+        print("Using CT_UNet_Model")
         model = CT_UNet_Model(in_channels=1, out_channels=1, features=config.UNET_FEATURES).to(device)
 
-    elif model_type == "new_ct_l2o":
-        print("🔧 Sử dụng New_CT_L2O_Model")
-        model = New_CT_L2O_Model(
+    elif model_type == "unet_l2o":
+        print("Using UNetL2O")
+        model = UNetL2O(
             A=A,
             lambd=config.LAMBD,
             alpha=config.ALPHA,
@@ -46,7 +46,7 @@ def build_model(A, device):
         ).to(device)
 
     elif model_type == "ct_l2o":
-        print("🔧 Sử dụng CT_L2O_Model")
+        print("Using CT_L2O_Model")
         model = CT_L2O_Model(
             A=A,
             lambd=config.LAMBD,
@@ -58,7 +58,7 @@ def build_model(A, device):
         ).to(device)
 
     elif model_type == "scale_ct_l2o":
-        print("🔧 Sử dụng Scale_CT_L2O_Model")
+        print("Using Scale_CT_L2O_Model")
         model = Scale_CT_L2O_Model(
             A=A,
             lambd=config.LAMBD,
@@ -70,26 +70,26 @@ def build_model(A, device):
         ).to(device)
 
     else:
-        raise ValueError(f"❌ MODEL_TYPE '{config.MODEL_TYPE}' không hợp lệ!")
+        raise ValueError(f"Invalid MODEL_TYPE '{config.MODEL_TYPE}'!")
 
     return model
 
 
 def evaluate_model():
-    """Đánh giá model trên tập test"""
+    """Evaluate the model on the test dataset"""
     set_seed(config.SEED)
-    print("Đang tải dữ liệu test...")
+    print("Loading test data...")
     _, test_loader, A = get_dataloaders(config.BATCH_SIZE)
-    print("Dữ liệu test đã sẵn sàng.")
+    print("Test data ready.")
 
-    # Khởi tạo model
+    # Initialize model
     model = build_model(A, config.DEVICE)
     model_save_path = f"{config.MODEL_TYPE}.pth"
 
-    # Kiểm tra checkpoint
+    # Check for checkpoint
     if not os.path.exists(model_save_path):
-        print(f"❌ Không tìm thấy checkpoint: {model_save_path}")
-        print("Vui lòng chạy 'train_general.py' để huấn luyện trước.")
+        print(f"Checkpoint not found: {model_save_path}")
+        print("Please run 'train_general.py' to train the model first.")
         return
 
     # Load checkpoint
@@ -97,7 +97,7 @@ def evaluate_model():
     model, _, _, _ = load_checkpoint(model, optimizer, model_save_path)
     model.eval()
 
-    print(f"\n--- Đang đánh giá model [{config.MODEL_TYPE}] ---")
+    print(f"\n--- Evaluating model [{config.MODEL_TYPE}] ---")
 
     avg_psnr = 0.0
     avg_ssim = 0.0
@@ -121,13 +121,13 @@ def evaluate_model():
     avg_ssim /= len(test_loader.dataset)
     avg_mse /= len(test_loader.dataset)
 
-    print("\n--- Kết quả đánh giá ---")
+    print("\n--- Evaluation Results ---")
     print(f"Average PSNR: {avg_psnr:.4f}")
     print(f"Average SSIM: {avg_ssim:.4f}")
     print(f"Average MSE:  {avg_mse:.6f}")
 
-    # Hiển thị trực quan
-    print("\n--- Trực quan một vài mẫu ---")
+    # Visualization
+    print("\n--- Visualizing a few samples ---")
     display_model_outputs(model, test_loader, config.DEVICE, num_samples=3)
 
 

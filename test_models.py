@@ -7,9 +7,9 @@ import config
 from dataset import get_dataloaders
 from utils import set_seed, count_parameters
 
-# Import TẤT CẢ các model của bạn từ file model.py
+# Import all models from model.py
 from model import (
-    ImplicitL2OModel, # Thêm lại model cơ sở
+    ImplicitL2OModel,  # Base model
     CT_L2O_Model,
     New_CT_L2O_Model,
     CT_FFPN_Model,
@@ -18,112 +18,112 @@ from model import (
     Scale_CT_L2O_Model
 )
 
+
 def run_smoke_test():
     """
-    Chạy thử một batch qua các model để kiểm tra lỗi.
+    Run a smoke test: pass one batch through each model to check for runtime errors.
     """
-    print("--- BẮT ĐẦU SMOKE TEST ---")
+    print("--- STARTING SMOKE TEST ---")
     set_seed(config.SEED)
     device = config.DEVICE
-    
-    # 1. Tải 1 batch dữ liệu
-    # ==========================
-    print("\n[Bước 1] Đang tải 1 batch dữ liệu...")
+
+    # 1. Load a single batch of data
+    # ==============================
+    print("\n[Step 1] Loading one batch of data...")
     try:
-        train_loader, _, A = get_dataloaders(batch_size=32) # Chỉ cần batch nhỏ
+        train_loader, _, A = get_dataloaders(batch_size=32)
         S = torch.diag(torch.count_nonzero(A, dim=0) ** -1.0).float().to(device)
-        # Lấy 1 batch
+
+        # Get one batch
         inputs, targets = next(iter(train_loader))
         inputs, targets = inputs.to(device), targets.to(device)
-        
-        print(f"Tải dữ liệu OK. Shape Input: {inputs.shape}, Shape Target: {targets.shape}")
-        print(f"Ma trận A shape: {A.shape}")
-        
+
+        print(f"Data loaded successfully. Input shape: {inputs.shape}, Target shape: {targets.shape}")
+        print(f"Matrix A shape: {A.shape}")
+
     except Exception as e:
-        print(f"!!! LỖI khi tải dữ liệu: {e}")
+        print(f"Error while loading data: {e}")
         import traceback
         traceback.print_exc()
         return
 
-    # 2. Định nghĩa các model cần test
-    # ==========================
-    print("\n[Bước 2] Định nghĩa các model cơ bản...")
-    
+    # 2. Define models to test
+    # ==============================
+    print("\n[Step 2] Defining base models...")
+
     models_to_test = {
         # "CT_UNet_Model (End-to-End)": CT_UNet_Model(in_channels=1, out_channels=1),
-        
-        # "CT_L2O_Model (Gốc)": CT_L2O_Model(
+
+        # "CT_L2O_Model (Original)": CT_L2O_Model(
         #     A=A, K_out_channels=config.K_OUT_CHANNELS
         # ),
-        
-        # "New_CT_L2O_Model (U-Net L2O)": New_CT_L2O_Model(
+
+        # "UNetL2O (U-Net L2O)": UNetL2O(
         #     A=A, K_out_channels=config.K_OUT_CHANNELS
         # ),
-        
+
         # "CT_TVM_Model (Total Variation)": CT_TVM_Model(A=A.to(device)),
-        
-        # "Scale_CT_L2O_Model (Scale)": Scale_CT_L2O_Model(
+
+        # "Scale_CT_L2O_Model (Scaled)": Scale_CT_L2O_Model(
         #     A=A, K_out_channels=config.K_OUT_CHANNELS
         # ),
 
-        "CT_FFPN_Model (FFPN)": CT_FFPN_Model(A,S),
-        
+        "CT_FFPN_Model (FFPN)": CT_FFPN_Model(A, S),
     }
-    
-    
-    criterion = nn.MSELoss()
-    print(f"\n[Bước 2 Hoàn tất] Tổng cộng {len(models_to_test)} model sẽ được test.")
 
-    # 3. Chạy test từng model
-    # ==========================
-    print("\n[Bước 3] Bắt đầu test từng model...")
-    
+    criterion = nn.MSELoss()
+    print(f"\n[Step 2 Completed] Total {len(models_to_test)} model(s) will be tested.")
+
+    # 3. Run the test for each model
+    # ==============================
+    print("\n[Step 3] Starting model tests...")
+
     for name, model in models_to_test.items():
-        print(f"\n--- Đang test: {name} ---")
+        print(f"\n--- Testing model: {name} ---")
         try:
             model = model.to(device)
-            model.train() # Đặt ở chế độ train
-            
-            # Đếm tham số
-            print(f"Số tham số: {count_parameters(model):,}")
+            model.train()  # Set to training mode
+
+            # Count parameters
+            print(f"Number of parameters: {count_parameters(model):,}")
 
             # a. Forward pass
             start_time = time.time()
             outputs = model(inputs.view(inputs.size(0), -1).T)
-            #outputs = model(inputs)
-
+            # outputs = model(inputs)
             fwd_time = time.time() - start_time
-            print(f"Forward pass OK (thời gian: {fwd_time:.4f}s). Shape Output: {outputs.shape}")
+            print(f"Forward pass successful (time: {fwd_time:.4f}s). Output shape: {outputs.shape}")
 
-            # b. Tính Loss
+            # b. Compute loss
             loss = criterion(outputs, targets)
-            print(f"Tính Loss OK. Loss: {loss.item():.6f}")
+            print(f"Loss computed successfully. Loss: {loss.item():.6f}")
 
             # c. Backward pass
             start_time = time.time()
             loss.backward()
             bwd_time = time.time() - start_time
-            print(f"Backward pass OK (thời gian: {bwd_time:.4f}s)")
-            
-            # d. Kiểm tra gradient (tùy chọn)
+            print(f"Backward pass successful (time: {bwd_time:.4f}s)")
+
+            # d. Gradient check (optional)
             grad_check = any(p.grad is not None for p in model.parameters() if p.requires_grad)
             if grad_check:
-                print("Kiểm tra gradient: OK (Có gradient)")
+                print("Gradient check: OK (gradients detected)")
             else:
                 if count_parameters(model) > 0:
-                    print("!!! Cảnh báo: Không tìm thấy gradient!")
+                    print("Warning: No gradients found!")
                 else:
-                    print("Kiểm tra gradient: OK (Model không có tham số huấn luyện)")
-            
-            print(f"✅ TEST THÀNH CÔNG cho model: {name}")
+                    print("Gradient check: OK (model has no trainable parameters)")
+
+            print(f"Test successful for model: {name}")
 
         except Exception as e:
-            print(f"❌ LỖI với model {name}:")
+            print(f"Error while testing model {name}:")
             print(e)
             import traceback
-            traceback.print_exc() # In ra lỗi chi tiết
+            traceback.print_exc()  # Print detailed error traceback
 
-    print("\n--- SMOKE TEST HOÀN TẤT ---")
+    print("\n--- SMOKE TEST COMPLETED ---")
+
 
 if __name__ == "__main__":
     run_smoke_test()
