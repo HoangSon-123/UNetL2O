@@ -235,10 +235,6 @@ class CT_L2O_Model(ImplicitL2OModel):
 # -------------------------------------------------
 # 3. MODEL: New_CT_L2O_Model 
 # -------------------------------------------------
-import torch
-import torch.nn as nn
-import numpy as np
-
 
 class UNetL2O(ImplicitL2OModel):
     """
