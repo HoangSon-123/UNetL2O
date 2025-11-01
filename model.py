@@ -233,7 +233,7 @@ class CT_L2O_Model(ImplicitL2OModel):
             return Tx
 
 # -------------------------------------------------
-# 3. MODEL: New_CT_L2O_Model 
+# 3. MODEL: UNetL2O 
 # -------------------------------------------------
 
 class UNetL2O(ImplicitL2OModel):
@@ -851,17 +851,12 @@ class CT_FFPN_Model(nn.Module):
 # -------------------------------------------------
 # 5. MODEL: CT_UNet_Model 
 # -------------------------------------------------
+
 class CT_UNet_Model(nn.Module):
-    """
-    U-Net architecture for CT image reconstruction or enhancement.
 
-    The model consists of three downsampling (contracting) blocks 
-    followed by three upsampling (expanding) blocks. 
-    Skip connections are used between corresponding encoder and decoder layers.
-    """
-
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(self, in_channels: int, out_channels: int, verbose: bool = False):
         super().__init__()
+        self.verbose = verbose
 
         # Encoder (contracting path)
         self.conv1 = self.contract_block(in_channels, 32, 7, 3)
@@ -874,26 +869,20 @@ class CT_UNet_Model(nn.Module):
         self.upconv1 = self.expand_block(32 * 2, out_channels, 3, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through the U-Net.
-
-        Args:
-            x (torch.Tensor): Input image tensor of shape (B, C, H, W)
-
-        Returns:
-            torch.Tensor: Reconstructed or enhanced image tensor.
-        """
-        # Encoder
         conv1 = self.conv1(x)
         conv2 = self.conv2(conv1)
         conv3 = self.conv3(conv2)
-
-        # Decoder with skip connections
+    
         upconv3 = self.upconv3(conv3)
+        upconv3 = self.crop_to_match(upconv3, conv2)
         upconv2 = self.upconv2(torch.cat([upconv3, conv2], dim=1))
+    
+        upconv2 = self.crop_to_match(upconv2, conv1)
         upconv1 = self.upconv1(torch.cat([upconv2, conv1], dim=1))
+    
+        out = F.interpolate(upconv1, size=(128, 128), mode='bilinear', align_corners=False)
+        return out
 
-        return upconv1
 
     def contract_block(self, in_channels: int, out_channels: int, kernel_size: int, padding: int) -> nn.Sequential:
         """
@@ -926,6 +915,14 @@ class CT_UNet_Model(nn.Module):
             nn.ConvTranspose2d(out_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
         )
         return block
+
+    def crop_to_match(self, source, target):
+        """
+        Crop tensor `source` to match spatial size of `target`.
+        Ensures skip connections can concatenate without size mismatch.
+        """
+        _, _, h, w = target.shape
+        return source[:, :, :h, :w]
 
 # -------------------------------------------------
 # 6. MODEL: CT_TVM_Model 
