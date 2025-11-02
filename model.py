@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 from abc import ABC, abstractmethod
+import torch.nn.functional as F
+
 
 inference = torch.Tensor
 input_data = torch.Tensor
