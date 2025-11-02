@@ -1,0 +1,26 @@
+[
+  {
+    "L2O": {
+      "fidelity_thresh": 0.014244616031646729,
+      "proximal_residual_thresh": 29.17031478881836
+    }
+  },
+  {
+    "FFPN": {
+      "fidelity_thresh": 0,
+      "proximal_residual_thresh": 0
+    }
+  },
+  {
+    "UNet": {
+      "fidelity_thresh": 0,
+      "proximal_residual_thresh": 0
+    }
+  },
+  {
+    "TVM": {
+      "fidelity_thresh": 0,
+      "proximal_residual_thresh": 0
+    }
+  }
+]
