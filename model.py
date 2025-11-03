@@ -238,21 +238,17 @@ class CT_L2O_Model(ImplicitL2OModel):
 # 3. MODEL: UNetL2O 
 # -------------------------------------------------
 
-class UNetL2O(ImplicitL2OModel):
-    """
-    Learned optimization model for CT image reconstruction using an unrolled
-    ADMM-like iterative structure. The regularizer is implemented as a small
-    U-Net–like CNN acting as a learned proximal operator.
+class UNetL2O(nn.Module):
+    ''' Model to reconstruct CT image from measurements.
 
-    Args:
-        A (torch.Tensor): Forward projection matrix.
-        lambd (float): Regularization parameter.
-        alpha (float): Step size for the dual variable.
-        beta (float): Step size for the primal variable.
-        delta (float): Log-space scaling parameter for projection.
-        K_out_channels (int): Number of feature channels in the learned operator K.
-        max_depth (int): Maximum number of unrolled iterations.
-    """
+        Inferences are defined by
+
+            model(d) = argmin f_theta(Kx)   s.t.   ||Ax - d|| < delta,
+
+        where K, theta, and delta are tunable parameters.
+        The forward iteration is Linearized ADMM (L-ADMM) and
+        the stepsizes in the algorithm are tunable too.
+    '''
     def __init__(self,
                  A,
                  lambd=0.1,
@@ -277,82 +273,87 @@ class UNetL2O(ImplicitL2OModel):
         self.leaky_relu = nn.LeakyReLU(0.1)
 
         # layers for K
-        self.convK = nn.Conv2d(in_channels=1,
-                               out_channels=K_out_channels,
-                               kernel_size=3,
-                               padding=1,
-                               bias=False)
-        self.convK_T = nn.ConvTranspose2d(in_channels=K_out_channels,
-                                          out_channels=1,
-                                          kernel_size=3,
-                                          padding=1,
-                                          bias=False)
+        self.convK = nn.Conv2d(1, K_out_channels, kernel_size=3, padding=1, bias=False)
+        self.convK_T = nn.ConvTranspose2d(K_out_channels, 1, kernel_size=3, padding=1, bias=False)
 
-        # layers for R (U-Net inspired architecture)
-        # Encoder
+        # ========== Encoder ==========
         self.enc1 = nn.Sequential(
-            nn.Conv2d(K_out_channels, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(K_out_channels, K_out_channels * 2, kernel_size=3, padding=1),
+            nn.BatchNorm2d(K_out_channels * 2),
             nn.LeakyReLU(0.1),
-            nn.Conv2d(32, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(K_out_channels * 2, K_out_channels * 2, kernel_size=3, padding=1),
+            nn.BatchNorm2d(K_out_channels * 2),
             nn.LeakyReLU(0.1)
         )
         self.pool1 = nn.MaxPool2d(2, 2)
-        
+
         self.enc2 = nn.Sequential(
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(K_out_channels * 2, K_out_channels * 4, kernel_size=3, padding=1),
+            nn.BatchNorm2d(K_out_channels * 4),
             nn.LeakyReLU(0.1),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(K_out_channels * 4, K_out_channels * 4, kernel_size=3, padding=1),
+            nn.BatchNorm2d(K_out_channels * 4),
             nn.LeakyReLU(0.1)
         )
         self.pool2 = nn.MaxPool2d(2, 2)
-        
-        # Bottleneck with dilated convolutions
-        self.bottleneck = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=3, padding=2, dilation=2),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.1),
-            nn.Conv2d(128, 128, kernel_size=3, padding=2, dilation=2),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.1)
+
+        # ========== Bottleneck: Residual Block ==========
+        self.bottle_conv1 = nn.Conv2d(K_out_channels * 4, K_out_channels * 8, kernel_size=3, padding=1)
+        self.bottle_bn1   = nn.BatchNorm2d(K_out_channels * 8)
+        self.bottle_conv2 = nn.Conv2d(K_out_channels * 8, K_out_channels * 8, kernel_size=3, padding=1)
+        self.bottle_bn2   = nn.BatchNorm2d(K_out_channels * 8)
+        self.bottle_skip  = nn.Conv2d(K_out_channels * 4, K_out_channels * 8, kernel_size=1)
+
+        # ========== Decoder + Attention ==========
+        self.upconv2 = nn.ConvTranspose2d(K_out_channels * 8, K_out_channels * 4, kernel_size=2, stride=2)
+        self.att2    = nn.Sequential(   # attention gate cho skip enc2
+            nn.Conv2d(K_out_channels * 8, K_out_channels * 4, kernel_size=1),
+            nn.Sigmoid()
         )
-        
-        # Decoder
-        self.upconv2 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
         self.dec2 = nn.Sequential(
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(K_out_channels * 8, K_out_channels * 4, kernel_size=3, padding=1),
+            nn.BatchNorm2d(K_out_channels * 4),
             nn.LeakyReLU(0.1),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(K_out_channels * 4, K_out_channels * 4, kernel_size=3, padding=1),
+            nn.BatchNorm2d(K_out_channels * 4),
             nn.LeakyReLU(0.1)
         )
-        
-        self.upconv1 = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
+
+        self.upconv1 = nn.ConvTranspose2d(K_out_channels * 4, K_out_channels * 2, kernel_size=2, stride=2)
+        self.att1    = nn.Sequential(   # attention gate cho skip enc1
+            nn.Conv2d(K_out_channels * 4, K_out_channels * 2, kernel_size=1),
+            nn.Sigmoid()
+        )
         self.dec1 = nn.Sequential(
-            nn.Conv2d(64, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(K_out_channels * 4, K_out_channels * 2, kernel_size=3, padding=1),
+            nn.BatchNorm2d(K_out_channels * 2),
             nn.LeakyReLU(0.1),
-            nn.Conv2d(32, K_out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(K_out_channels),
+            nn.Conv2d(K_out_channels * 2, K_out_channels, kernel_size=3, padding=1),
             nn.LeakyReLU(0.1)
         )
+
+    # =================== Residual Block ===================
+    def bottleneck(self, x):
+        residual = self.bottle_skip(x)
+        out = self.leaky_relu(self.bottle_bn1(self.bottle_conv1(x)))
+        out = self.bottle_bn2(self.bottle_conv2(out))
+        out += residual
+        return self.leaky_relu(out)
 
     def _get_conv_crit(self, x, x_prev, d, tol=1.0e-2):
         batch_size = x.shape[0]
         x = x.view(batch_size, -1)
         d = d.view(batch_size, -1)
         x_prev = x_prev.view(batch_size, -1)
-
         res_norm = torch.max(torch.norm(x - x_prev, dim=1))
         residual_conv = res_norm <= tol
         return residual_conv
 
     def name(self) -> str:
         return "UNetL2O"
+
+    def device(self):
+        return next(self.parameters()).data.device
 
     def box_proj(self, x):
         return torch.clamp(x, min=0.0, max=1.0)
@@ -372,62 +373,62 @@ class UNetL2O(ImplicitL2OModel):
         return p
 
     def ball_proj(self, w, d, delta, proj_weight=0.99):
-        delta_val = torch.exp(self.delta) 
-
+        delta = torch.exp(torch.tensor(self.delta))
         dist = torch.norm(w - d, dim=0)
         d_norm = torch.norm(d, dim=0)
         dist[dist <= 1e-10] = 1e-10
         scale = torch.minimum(torch.ones(dist.shape, device=d.device),
-                              delta_val * d_norm / dist)
+                              delta*d_norm/dist)
         proj = d + scale * (w - d)
-        other = d + delta_val * d_norm * (w - d) / dist
-
+        other = d + delta * d_norm * (w - d) / dist
         if self.training:
             return proj_weight * proj + (1.0 - proj_weight) * other
         else:
             return proj
 
+    # =================== Forward R ===================
     def R(self, p):
         batch_size = p.shape[1]
-        p_res = p.permute(1, 0).view(batch_size, self.K_out_channels, 128, 128)
+        p = p.permute(1, 0).view(batch_size, self.K_out_channels, 128, 128)
 
         # Encoder
-        enc1 = self.enc1(p_res)
+        enc1 = self.enc1(p)
         pool1 = self.pool1(enc1)
         enc2 = self.enc2(pool1)
         pool2 = self.pool2(enc2)
-        
-        # Bottleneck
+
+        # Bottleneck (Residual Block)
         bottle = self.bottleneck(pool2)
-        
-        # Decoder with skip connections
+
+        # Decoder + Attention
         up2 = self.upconv2(bottle)
-        dec2_input = torch.cat([up2, enc2], dim=1)
-        dec2 = self.dec2(dec2_input)
-        
+        att2 = self.att2(torch.cat([up2, enc2], dim=1))
+        enc2_att = enc2 * att2
+        dec2 = self.dec2(torch.cat([up2, enc2_att], dim=1))
+
         up1 = self.upconv1(dec2)
-        dec1_input = torch.cat([up1, enc1], dim=1)
-        dec1 = self.dec1(dec1_input)
-        
+        att1 = self.att1(torch.cat([up1, enc1], dim=1))
+        enc1_att = enc1 * att1
+        dec1 = self.dec1(torch.cat([up1, enc1_att], dim=1))
+
         # Residual connection
-        p_res = p_res + dec1
-        
-        p_res = p_res.view(batch_size, -1).permute(1, 0)
-        p_res = p_res.view(self.K_out_channels * (128**2), batch_size)
+        p = p + dec1
 
-        return p_res 
+        p = p.view(batch_size, -1).permute(1, 0)
+        p = p.view(self.K_out_channels*(128**2), batch_size)
+        return p
 
-    def _apply_T(self, x: inference, d: input_data, return_tuple=False): # type: ignore
+    # =================== ADMM Update ===================
+    def _apply_T(self, x, d, return_tuple=False):
         batch_size = x.shape[0]
-
-        d_flat = d.view(d.shape[0], -1).to(self.device())
-        d_flat = d_flat.permute(1, 0)
+        d = d.view(d.shape[0], -1).to(self.device())
+        d = d.permute(1, 0)
         xk = x.view(x.shape[0], -1)
         xk = xk.permute(1, 0)
         pk = self.K(xk)
         wk = torch.matmul(self.A, xk)
         nuk1 = torch.zeros(pk.size(), device=self.device())
-        nuk2 = torch.zeros(d_flat.size(), device=self.device())
+        nuk2 = torch.zeros(d.size(), device=self.device())
 
         alpha = torch.clamp(self.alpha.data, min=0, max=2)
         beta = torch.clamp(self.beta.data, min=0, max=2)
@@ -435,15 +436,14 @@ class UNetL2O(ImplicitL2OModel):
         delta = self.delta.data
 
         # pk step
-        pk = pk + lambd*(nuk1 + alpha * (self.K(xk) - pk))
-        pk = self.R(pk)
+        pk_re = pk + lambd*(nuk1 + alpha * (self.K(xk) - pk))
+        pk = self.R(pk_re)
 
         # wk step
         Axk = torch.matmul(self.A, xk)
         res_temp = nuk2 + alpha * (Axk - wk)
         temp_term = wk + lambd * res_temp
-
-        wk = self.ball_proj(temp_term, d_flat, delta)
+        wk = self.ball_proj(temp_term, d, delta)
 
         # nuk1 step
         res_temp = self.K(xk) - pk
@@ -461,28 +461,23 @@ class UNetL2O(ImplicitL2OModel):
         # xk step
         xk = torch.clamp(xk - beta * rk, min=0, max=1)
         
-        xk_res = xk.permute(1, 0).view(batch_size, 1, 128, 128)
-        
         if return_tuple:
-            return xk_res, nuk1_plus, pk
+            return xk.permute(1, 0).view(batch_size, 1, 128, 128), nuk1_plus, pk, pk_re
         else:
-            return xk_res
+            return xk.permute(1, 0).view(batch_size, 1, 128, 128)
 
+    # =================== Forward ===================
     def forward(self, d, depth_warning=False, return_depth=False, tol=1e-3, return_all_vars=False):
         with torch.no_grad():
             self.depth = 0.0
-            x = torch.zeros((d.size()[0], 1, 128, 128),
-                            device=self.device())
-            x_prev = np.inf*torch.ones(x.shape, device=self.device())
+            x = torch.zeros((d.size()[0], 1, 128, 128), device=self.device())
+            x_prev = np.Inf*torch.ones(x.shape, device=self.device())
             all_samp_conv = False
 
             while not all_samp_conv and self.depth < self.max_depth:
                 x_prev = x.clone()
                 x = self._apply_T(x, d)
-                all_samp_conv = self._get_conv_crit(x,
-                                                    x_prev,
-                                                    d,
-                                                    tol=tol)
+                all_samp_conv = self._get_conv_crit(x, x_prev, d, tol=tol)
                 self.depth += 1
 
         if self.depth >= self.max_depth and depth_warning:
@@ -490,14 +485,14 @@ class UNetL2O(ImplicitL2OModel):
 
         self.fixed_point_error = torch.max(torch.norm(x - x_prev, dim=1))
 
-        # Apply T *with* gradient tracking
-        Tx, nuk1, pk = self._apply_T(x, d, return_tuple=True)
-        
-        if return_depth:
+        if return_depth and not return_all_vars:
+            Tx = self._apply_T(x, d)
             return Tx, self.depth
         elif return_all_vars:
-            return Tx, nuk1, pk
+            Tx, nuk1, pk, pk_re = self._apply_T(x, d, return_tuple=True)
+            return Tx, nuk1, pk, pk_re
         else:
+            Tx = self._apply_T(x, d)
             return Tx
 # -------------------------------------------------
 # 4. MODEL: CT_FFPN_Model 
