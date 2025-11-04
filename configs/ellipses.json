@@ -13,8 +13,8 @@
   },
   {
     "UNet": {
-      "fidelity_thresh": 0,
-      "proximal_residual_thresh": 0
+      "fidelity_thresh": 0.109770,
+      "proximal_residual_thresh": 551.735229
     }
   },
   {

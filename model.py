@@ -691,104 +691,97 @@ class CT_UNet_Model(nn.Module):
 # 6. MODEL: CT_TVM_Model 
 # -------------------------------------------------
 class CT_TVM_Model(nn.Module):
-    def __init__(self,
-                 A, lambd=0.1,
-                 alpha=0.1,
-                 beta=0.1,
-                 eps=1e-1):
+    def __init__(self, A, lambd=0.1, alpha=0.1, beta=0.1, eps=1.0):
         super().__init__()
         self.A = A
-        self.At = A.t()
+        self.At = A.t() 
         self.lambd = lambd
         self.alpha = alpha
         self.beta = beta
         self.shrink = torch.nn.Softshrink(lambd=lambd)
         self.eps = eps
-        self.model_device = 'cpu'
 
     def name(self) -> str:
         return "CT_TVM_Model"
 
     def device(self):
-        return self.model_device
+        return "cuda:0" #next(self.parameters()).data.device
 
     def box_proj(self, u):
         return torch.clamp(u, min=0.0, max=1.0)
-
-    def D(self, u):
-        batch_size = u.shape[-1]
-        u_reshaped = u.view(128, 128, batch_size)
-        Dux = torch.roll(u_reshaped, 1, 0) - u_reshaped
-        Dux = Dux.view(128 ** 2, batch_size)
-        Duy = torch.roll(u_reshaped, 1, 1) - u_reshaped
-        Duy = Duy.view(128 ** 2, batch_size)
-        Du = torch.cat((Dux, Duy), 0)
+    
+    def D(self, u):  
+        u = u.view(128, 128, u.shape[-1])
+        Dux = torch.roll(u, 1, 0) - u
+        Dux = Dux.view(128 ** 2, u.shape[-1])
+        Duy = torch.roll(u, 1, 1) - u
+        Duy = Duy.view(128 ** 2, u.shape[-1])
+        Du  = torch.cat((Dux, Duy), 0)
         return Du
 
-    def Dt(self, p):
-        batch_size = p.shape[-1]
-        p_reshaped = p.view(2, 128, 128, batch_size)  # Split 2*128^2 into 2 x 128 x 128
-        
-        px = p_reshaped[0, :, :, :]  # Shape (128, 128, batch_size)
+    def Dt(self, p): 
+        p    = p.view(256, 128, p.shape[1])
+        px   = p[0:128, :, :]
         Dtpx = torch.roll(px, -1, 0) - px
-        Dtpx = Dtpx.view(128 ** 2, batch_size)
+        Dtpx = Dtpx.view(128 ** 2, p.shape[2])
 
-        py = p_reshaped[1, :, :, :]  # Shape (128, 128, batch_size)
+        py   = p[128:256, :, :]
         Dtpy = torch.roll(py, -1, 1) - py
-        Dtpy = Dtpy.view(128 ** 2, batch_size)
-        
-        Dtp = Dtpx + Dtpy
-        return Dtp
+        Dtpy = Dtpy.view(128 ** 2, p.shape[2])
+        Dtp  = Dtpx + Dtpy
+        return Dtp        
 
     def ball_proj(self, w, d, eps):
+        ''' Project w onto the ball B(d, eps)
+        ''' 
         dist = torch.norm(w - d, dim=0)
-        dist[dist <= 1e-10] = 1e-10
-        d_norm = torch.norm(d, dim=0)
-        scale = torch.minimum(torch.ones(dist.shape, device=d.device),
-                              self.eps * d_norm / dist)
+        scale = torch.min(torch.ones(dist.shape, device=d.device), self.eps/dist)
         proj = d + scale * (w - d)
+
+        #dist = torch.norm(w - d, dim=0) 
+        #out_ball = dist > eps  
+        #proj = w.clone() 
+        #proj[:, out_ball] = d[:, out_ball] + (w[:, out_ball] - d[:, out_ball]) / dist[out_ball]
         return proj
 
-    def forward(self, d, tol=1.0e-3, max_depth=500, depth_warning=False):
+    def forward(self, d, tol=1.0e-3, max_depth=12, 
+                depth_warning=False):
+      
         self.depth = 0.0
-        self.model_device = d.device
-        
-        # Ensure A and At are on the correct device
-        A_dev = self.A.to(self.device())
-        At_dev = self.At.to(self.device())
 
-        d_vec = d.view(d.size()[0], -1).to(self.device())
-        d_vec = d_vec.permute(1, 0)
-        batch_size = d_vec.size()[1]
-        
-        uk = torch.zeros((128 ** 2, batch_size), device=self.device())
-        pk = self.D(uk)
-        wk = torch.matmul(A_dev, uk)
+        # Initialize sequences 
+        d    = d.view(d.size()[0],-1).to(self.device()) 
+        d    = d.permute(1,0)         
+        uk   = torch.zeros((128 ** 2, d.size()[1]), device=self.device())
+        pk   = self.D(uk) 
+        wk   = torch.matmul(self.A, uk)  
         nuk1 = torch.zeros(pk.size(), device=self.device())
-        nuk2 = torch.zeros(d_vec.size(), device=self.device())
+        nuk2 = torch.zeros(d.size(), device=self.device())   
 
         for _ in range(max_depth):
+
+            # TVM updates
             res1 = self.Dt(nuk1 + self.alpha * (self.D(uk) - pk))
-            Auk = torch.matmul(A_dev, uk)
-            res2 = torch.matmul(At_dev, nuk2 + self.alpha * (Auk - wk))
-            rk = self.beta * (res1 + res2)
-            uk = self.box_proj(uk - rk)
+            Auk  = torch.matmul(self.A, uk)
+            res2 = torch.matmul(self.At, nuk2 + self.alpha * (Auk - wk))
+            rk   = self.beta * (res1 + res2)
+            uk   = self.box_proj(uk - rk)
+            
+            res  = self.lambd * (nuk1 + self.alpha * (self.D(uk)-pk))
+            pk   = self.shrink(pk + res)
 
-            res = self.lambd * (nuk1 + self.alpha * (self.D(uk) - pk))
-            pk = self.shrink(pk + res)
-
-            Auk = torch.matmul(A_dev, uk)
-            res = self.lambd * (nuk2 + self.alpha * (Auk - wk))
-            wk = self.ball_proj(wk + res, d_vec, self.eps)
-
+            Auk  = torch.matmul(self.A, uk)
+            res  = self.lambd * (nuk2 + self.alpha * (Auk - wk))
+            wk   = self.ball_proj(wk + res, d, self.eps)
+ 
             nuk1 = nuk1 + self.alpha * (self.D(uk) - pk)
-            nuk2 = nuk2 + self.alpha * (torch.matmul(A_dev, uk) - wk)
+            nuk2 = nuk2 + self.alpha * (torch.matmul(self.A, uk) - wk)
 
         self.depth = max_depth
         if self.depth >= max_depth and depth_warning:
             print("\nWarning: Max Depth Reached - Break Forward Loop\n")
 
-        uk = uk.permute(1, 0)
+        uk = uk.permute(1,0)        
         return uk.view(uk.shape[0], 1, 128, 128)
 
 # -------------------------------------------------

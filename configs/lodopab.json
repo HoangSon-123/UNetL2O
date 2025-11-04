@@ -1,8 +1,14 @@
 [
   {
     "L2O": {
-      "fidelity_thresh": 0.014820056036114693,
-      "proximal_residual_thresh": 25.00356674194336
+      "fidelity_thresh": 0.016,
+      "proximal_residual_thresh": 25
+    }
+  },
+  {
+    "UNetL2O": {
+      "fidelity_thresh": 0.016,
+      "proximal_residual_thresh": 25
     }
   },
   {
