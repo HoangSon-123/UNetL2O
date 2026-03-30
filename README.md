@@ -1,5 +1,5 @@
-Chạy FFPN phải đổi lại outputs
+FFPN requires the outputs to be modified before execution.
 
-Chạy TVM không cần update lại đạo hàm
+TVM can be executed without updating the gradients.
 
-Các mô hình khác chạy bình thường
+The other models can be run normally.
