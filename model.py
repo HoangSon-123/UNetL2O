@@ -471,7 +471,7 @@ class UNetL2O(nn.Module):
         with torch.no_grad():
             self.depth = 0.0
             x = torch.zeros((d.size()[0], 1, 128, 128), device=self.device())
-            x_prev = np.Inf*torch.ones(x.shape, device=self.device())
+            x_prev = np.inf*torch.ones(x.shape, device=self.device())
             all_samp_conv = False
 
             while not all_samp_conv and self.depth < self.max_depth:
