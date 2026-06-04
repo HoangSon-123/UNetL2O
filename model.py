@@ -634,18 +634,27 @@ class CT_UNet_Model(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.size(0)
         x_flat = x.view(batch_size, -1) 
+        
         x_backprojected = torch.matmul(x_flat, self.A) 
         x_image = x_backprojected.view(batch_size, 1, 128, 128)
-    
+
+        return self.denoise(x_image)
+
+    def denoise(self, x_image: torch.Tensor) -> torch.Tensor:
         conv1 = self.conv1(x_image)
         conv2 = self.conv2(conv1)
         conv3 = self.conv3(conv2)
+        conv4 = self.conv4(conv3) 
     
-        upconv3 = self.upconv3(conv3)
+        upconv4 = self.upconv4(conv4)
+        upconv4 = self.crop_to_match(upconv4, conv3)
+        
+        upconv3 = self.upconv3(torch.cat([upconv4, conv3], dim=1))
         upconv3 = self.crop_to_match(upconv3, conv2)
+        
         upconv2 = self.upconv2(torch.cat([upconv3, conv2], dim=1))
-    
         upconv2 = self.crop_to_match(upconv2, conv1)
+        
         upconv1 = self.upconv1(torch.cat([upconv2, conv1], dim=1))
     
         out = F.interpolate(upconv1, size=(128, 128), mode='bilinear', align_corners=False)
