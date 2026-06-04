@@ -641,15 +641,15 @@ class CT_UNet_Model(nn.Module):
         return self.denoise(x_image)
 
     def denoise(self, x_image: torch.Tensor) -> torch.Tensor:
+        # --- U-Net 3 Mức ---
+        
+        # Đường thu hẹp (Encoder)
         conv1 = self.conv1(x_image)
         conv2 = self.conv2(conv1)
         conv3 = self.conv3(conv2)
-        conv4 = self.conv4(conv3) 
     
-        upconv4 = self.upconv4(conv4)
-        upconv4 = self.crop_to_match(upconv4, conv3)
-        
-        upconv3 = self.upconv3(torch.cat([upconv4, conv3], dim=1))
+        # Đường mở rộng (Decoder) + Skip Connections
+        upconv3 = self.upconv3(conv3)
         upconv3 = self.crop_to_match(upconv3, conv2)
         
         upconv2 = self.upconv2(torch.cat([upconv3, conv2], dim=1))
@@ -657,6 +657,7 @@ class CT_UNet_Model(nn.Module):
         
         upconv1 = self.upconv1(torch.cat([upconv2, conv1], dim=1))
     
+        # Cố định kích thước đầu ra
         out = F.interpolate(upconv1, size=(128, 128), mode='bilinear', align_corners=False)
         return out
     
