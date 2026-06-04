@@ -616,23 +616,28 @@ class CT_FFPN_Model(nn.Module):
 # -------------------------------------------------
 
 class CT_UNet_Model(nn.Module):
-
-    def __init__(self, in_channels: int, out_channels: int, verbose: bool = False):
+    def __init__(self, in_channels: int, out_channels: int, A_matrix: torch.Tensor, verbose: bool = False):
         super().__init__()
         self.verbose = verbose
-
-        # Encoder (contracting path)
+        self.A = A_matrix 
+        
+        # Encoder
         self.conv1 = self.contract_block(in_channels, 32, 7, 3)
         self.conv2 = self.contract_block(32, 64, 3, 1)
         self.conv3 = self.contract_block(64, 128, 3, 1)
 
-        # Decoder (expanding path)
+        # Decoder
         self.upconv3 = self.expand_block(128, 64, 3, 1)
         self.upconv2 = self.expand_block(64 * 2, 32, 3, 1)
         self.upconv1 = self.expand_block(32 * 2, out_channels, 3, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        conv1 = self.conv1(x)
+        batch_size = x.size(0)
+        x_flat = x.view(batch_size, -1) 
+        x_backprojected = torch.matmul(x_flat, self.A) 
+        x_image = x_backprojected.view(batch_size, 1, 128, 128)
+    
+        conv1 = self.conv1(x_image)
         conv2 = self.conv2(conv1)
         conv3 = self.conv3(conv2)
     
@@ -645,13 +650,8 @@ class CT_UNet_Model(nn.Module):
     
         out = F.interpolate(upconv1, size=(128, 128), mode='bilinear', align_corners=False)
         return out
-
-
+    
     def contract_block(self, in_channels: int, out_channels: int, kernel_size: int, padding: int) -> nn.Sequential:
-        """
-        Creates a contracting block with two convolutional layers, 
-        followed by BatchNorm, ReLU, and a MaxPooling layer.
-        """
         block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=1, padding=padding),
             nn.BatchNorm2d(out_channels),
@@ -664,10 +664,6 @@ class CT_UNet_Model(nn.Module):
         return block
 
     def expand_block(self, in_channels: int, out_channels: int, kernel_size: int, padding: int) -> nn.Sequential:
-        """
-        Creates an expanding block with two convolutional layers 
-        followed by BatchNorm, ReLU, and a transposed convolution for upsampling.
-        """
         block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=padding),
             nn.BatchNorm2d(out_channels),
@@ -680,10 +676,6 @@ class CT_UNet_Model(nn.Module):
         return block
 
     def crop_to_match(self, source, target):
-        """
-        Crop tensor `source` to match spatial size of `target`.
-        Ensures skip connections can concatenate without size mismatch.
-        """
         _, _, h, w = target.shape
         return source[:, :, :h, :w]
 
