@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import config
 
 def set_seed(seed_value):
-    """Đặt seed cho các thư viện để đảm bảo tính tái lập."""
+    """Set the seed for libraries to ensure reproducibility."""
     torch.manual_seed(seed_value)
     np.random.seed(seed_value)
     random.seed(seed_value)
@@ -15,11 +15,11 @@ def set_seed(seed_value):
         torch.cuda.manual_seed_all(seed_value)
 
 def count_parameters(model):
-    """Đếm số lượng tham số có thể huấn luyện trong model."""
+    """Count the number of trainable parameters in the model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 def save_checkpoint(model, optimizer, epoch, loss, filename):
-    """Lưu checkpoint của model."""
+    """Save a model checkpoint."""
     print(f"=> Saving checkpoint to {filename}")
     checkpoint = {
         'epoch': epoch,
@@ -30,7 +30,7 @@ def save_checkpoint(model, optimizer, epoch, loss, filename):
     torch.save(checkpoint, filename)
 
 def load_checkpoint(model, optimizer, filename):
-    """Tải checkpoint của model."""
+    """Load a model checkpoint."""
     print(f"=> Loading checkpoint from {filename}")
     if not os.path.exists(filename):
         print("! Checkpoint not found, starting from scratch.")
@@ -44,7 +44,7 @@ def load_checkpoint(model, optimizer, filename):
     return model, optimizer, epoch, loss
 
 def display_model_outputs(model, test_loader, device, num_samples=3):
-    """Trực quan hóa kết quả dự đoán so với ảnh gốc."""
+    """Visualize predicted outputs compared to the ground truth images."""
     model.eval()
     sample_count = 0
     print("Visualizing model outputs...")

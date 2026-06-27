@@ -102,11 +102,7 @@ class CT_L2O_Model(ImplicitL2OModel):
         return residual_conv
 
     def name(self) -> str:
-        return "CTModel" # (Có thể đổi tên thành "CT_L2O_Model")
-
-    # (Lưu ý: hàm device() đã có trong class cha ImplicitL2OModel)
-    # def device(self):
-    #     return next(self.parameters()).data.device
+        return "CTModel" 
 
     def box_proj(self, x):
         return torch.clamp(x, min=0.0, max=1.0)
@@ -126,7 +122,7 @@ class CT_L2O_Model(ImplicitL2OModel):
         return p
 
     def ball_proj(self, w, d, delta, proj_weight=0.99):
-        delta = torch.exp(self.delta) # Sử dụng self.delta
+        delta = torch.exp(self.delta) 
         dist = torch.norm(w - d, dim=0)
         d_norm = torch.norm(d, dim=0)
         dist[dist <= 1e-10] = 1e-10
@@ -144,14 +140,13 @@ class CT_L2O_Model(ImplicitL2OModel):
         batch_size = p.shape[1]
         p_res = p.permute(1, 0).view(batch_size, self.K_out_channels, 128, 128)
         
-        # Sửa lại theo code bạn cung cấp (dùng residual cho mỗi lớp)
         p_res = p_res + self.leaky_relu(self.conv1(p_res))
         p_res = p_res + self.leaky_relu(self.conv2(p_res))
         p_res = p_res + self.leaky_relu(self.conv3(p_res))
 
         p_res = p_res.view(batch_size, -1).permute(1, 0)
         p_res = p_res.view(self.K_out_channels*(128**2), batch_size)
-        return p_res # Trả về p_res (đã bao gồm p gốc)
+        return p_res 
 
     def _apply_T(self, x: inference, d: input_data, return_tuple=False): # type: ignore
         batch_size = x.shape[0]
@@ -168,7 +163,7 @@ class CT_L2O_Model(ImplicitL2OModel):
         alpha = torch.clamp(self.alpha.data, min=0, max=2)
         beta = torch.clamp(self.beta.data, min=0, max=2)
         lambd = torch.clamp(self.lambd.data, min=0, max=2)
-        delta = self.delta.data # Sử dụng self.delta
+        delta = self.delta.data
 
         # pk step
         pk = pk + lambd*(nuk1 + alpha * (self.K(xk) - pk))
@@ -178,7 +173,7 @@ class CT_L2O_Model(ImplicitL2OModel):
         Axk = torch.matmul(self.A, xk)
         res_temp = nuk2 + alpha * (Axk - wk)
         temp_term = wk + lambd * res_temp
-        wk = self.ball_proj(temp_term, d, delta) # Truyền delta vào
+        wk = self.ball_proj(temp_term, d, delta) 
 
         # nuk1 step
         res_temp = self.K(xk) - pk
@@ -641,14 +636,13 @@ class CT_UNet_Model(nn.Module):
         return self.denoise(x_image)
 
     def denoise(self, x_image: torch.Tensor) -> torch.Tensor:
-        # --- U-Net 3 Mức ---
         
-        # Đường thu hẹp (Encoder)
+        # (Encoder)
         conv1 = self.conv1(x_image)
         conv2 = self.conv2(conv1)
         conv3 = self.conv3(conv2)
     
-        # Đường mở rộng (Decoder) + Skip Connections
+        #  (Decoder) + Skip Connections
         upconv3 = self.upconv3(conv3)
         upconv3 = self.crop_to_match(upconv3, conv2)
         
@@ -657,7 +651,6 @@ class CT_UNet_Model(nn.Module):
         
         upconv1 = self.upconv1(torch.cat([upconv2, conv1], dim=1))
     
-        # Cố định kích thước đầu ra
         out = F.interpolate(upconv1, size=(128, 128), mode='bilinear', align_corners=False)
         return out
     
@@ -970,3 +963,72 @@ class Scale_CT_L2O_Model(ImplicitL2OModel):
             return Tx, nuk1, pk
         else:
             return Tx
+
+#-------------------------------------------------
+# 8. MODEL: RED-CNN
+#-------------------------------------------------
+class RED_CNN(nn.Module):
+    def __init__(self, A_matrix, features=64, img_size=128):
+        super(RED_CNN, self).__init__()
+        
+        self.img_size = img_size
+        
+        self.register_buffer('At_matrix', A_matrix.t())
+        
+        def conv_block(in_c, out_c, dilation=1):
+            pad = dilation
+            return nn.Sequential(
+                nn.Conv2d(in_c, out_c, kernel_size=3, stride=1, padding=pad, dilation=dilation),
+                nn.PReLU(out_c) 
+            )
+
+        self.conv1 = conv_block(1, features, dilation=1)
+        self.conv2 = conv_block(features, features, dilation=1)
+        
+        self.conv3 = conv_block(features, features, dilation=2)
+        self.conv4 = conv_block(features, features, dilation=3)
+        self.conv5 = conv_block(features, features, dilation=2)
+        
+        self.upconv1 = conv_block(features, features, dilation=1)
+        self.upconv2 = conv_block(features, features, dilation=1)
+        self.upconv3 = conv_block(features, features, dilation=1)
+        self.upconv4 = conv_block(features, features, dilation=1)
+        
+        self.final_conv = nn.Conv2d(features, 1, kernel_size=3, stride=1, padding=1)
+
+    def forward(self, d_batch):
+        """
+        Input: d_batch (Sinogram/Signal) - shape: [Batch, C, H, W] or [Batch, N]
+        Output: Returns 2 values:
+        1. Clean CT image (outputs) - shape: [Batch, 1, 128, 128]
+        2. Raw FBP image (raw_fbp_imgs) - shape: [Batch, 1, 128, 128]
+        """
+        batch_size = d_batch.shape[0]
+        
+        y = d_batch.view(batch_size, -1).permute(1, 0)
+        
+        x_dirty_vec = torch.matmul(self.At_matrix, y)
+        
+        x_img = x_dirty_vec.permute(1, 0).view(batch_size, 1, self.img_size, self.img_size)
+        
+        x_min = x_img.amin(dim=(2,3), keepdim=True)
+        x_max = x_img.amax(dim=(2,3), keepdim=True)
+        x_img = (x_img - x_min) / (x_max - x_min + 1e-8)
+        
+        e1 = self.conv1(x_img)
+        e2 = self.conv2(e1)
+        
+        b1 = self.conv3(e2)
+        b2 = self.conv4(b1)
+        b3 = self.conv5(b2)
+        
+        d1 = self.upconv1(b3) + e2
+        d2 = self.upconv2(d1) + e1
+        d3 = self.upconv3(d2)
+        d4 = self.upconv4(d3)
+        
+        out = self.final_conv(d4)
+        
+        final_output = out + x_img
+        
+        return final_output, x_img

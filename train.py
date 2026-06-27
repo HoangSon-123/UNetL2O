@@ -10,11 +10,10 @@ import config
 from dataset import get_dataloaders
 from utils import set_seed, save_checkpoint, load_checkpoint, count_parameters
 
-# import các model có thể chọn
 from model import *
 
 def train_epoch(loader, model, criterion, optimizer, device):
-    """Huấn luyện 1 epoch chung cho mọi model."""
+    """Train for a single epoch."""
     model.train()
     epoch_loss = 0.0
     progress_bar = tqdm(loader, desc="Training", leave=False, ascii=True)
@@ -35,7 +34,7 @@ def train_epoch(loader, model, criterion, optimizer, device):
 
 
 def validate_epoch(loader, model, criterion, device):
-    """Đánh giá trên tập test (không cần grad)."""
+    """Evaluate on the test set (without gradients)."""
     model.eval()
     val_loss = 0.0
     with torch.no_grad():
@@ -47,25 +46,25 @@ def validate_epoch(loader, model, criterion, device):
 
 
 def build_model(A, device):
-    """Tự động khởi tạo model theo config.MODEL_TYPE"""
+    """Automatically initialize the model based on config.MODEL_TYPE"""
     model_type = config.MODEL_TYPE.lower()
 
     if model_type == "tvm":
-        print("🔧 Sử dụng CT_TVM_Model")
+        print("Using CT_TVM_Model")
         model = CT_TVM_Model(A=A).to(device)
 
     elif model_type == "ffpn":
-        print("🔧 Sử dụng CT_FFPN_Model")
+        print("Using CT_FFPN_Model")
         S = torch.diag(torch.count_nonzero(A, dim=0) ** -1.0).float().to(device)
         model = CT_FFPN_Model(S=S, A=A).to(device)
 
     elif model_type == "unet":
-        print("🔧 Sử dụng CT_UNet_Model")
+        print("Using CT_UNet_Model")
         model = CT_UNet_Model(in_channels=1, out_channels=1, features=config.UNET_FEATURES).to(device)
 
-    elif model_type == "new_ct_l2o":
-        print("🔧 Sử dụng New_CT_L2O_Model")
-        model = New_CT_L2O_Model(
+    elif model_type == "Unetl2o":
+        print("Using UNetL2O_Model")
+        model = UNetL2O(
             A=A,
             lambd=config.LAMBD,
             alpha=config.ALPHA,
@@ -76,7 +75,7 @@ def build_model(A, device):
         ).to(device)
 
     elif model_type == "ct_l2o":
-        print("🔧 Sử dụng CT_L2O_Model")
+        print("Using CT_L2O_Model")
         model = CT_L2O_Model(
             A=A,
             lambd=config.LAMBD,
@@ -88,7 +87,7 @@ def build_model(A, device):
         ).to(device)
 
     elif model_type == "scale_ct_l2o":
-        print("🔧 Sử dụng Scale_CT_L2O_Model")
+        print("Using Scale_CT_L2O_Model")
         model = Scale_CT_L2O_Model(
             A=A,
             lambd=config.LAMBD,
@@ -100,37 +99,35 @@ def build_model(A, device):
         ).to(device)
 
     else:
-        raise ValueError(f"❌ MODEL_TYPE '{config.MODEL_TYPE}' không hợp lệ!")
+        raise ValueError(f"Invalid MODEL_TYPE '{config.MODEL_TYPE}'!")
 
     return model
-
-
 
 
 def main():
     set_seed(config.SEED)
 
-    # 1️⃣ Tải dữ liệu
-    print("Đang tải dữ liệu...")
+    # 1. Load data
+    print("Loading data...")
     train_loader, test_loader, A = get_dataloaders(config.BATCH_SIZE)
-    print("Tải dữ liệu hoàn tất.")
+    print("Data loading completed.")
 
-    # 2️⃣ Khởi tạo model
+    # 2. Initialize model
     model = build_model(A, config.DEVICE)
 
-    # 3️⃣ Criterion & Optimizer
+    # 3. Criterion & Optimizer
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
 
-    # 4️⃣ Load checkpoint (nếu có)
+    # 4. Load checkpoint if available
     start_epoch = 0
     best_loss = config.BEST_LOSS_INIT
     if os.path.exists(config.SAVE_PATH):
         model, optimizer, start_epoch, best_loss = load_checkpoint(model, optimizer, config.SAVE_PATH)
-        print(f"Tiếp tục huấn luyện từ epoch {start_epoch+1}, best_loss={best_loss:.6f}")
+        print(f"Resuming training from epoch {start_epoch+1}, best_loss={best_loss:.6f}")
 
-    # 5️⃣ Train loop
-    print(f"Bắt đầu huấn luyện mô hình [{config.MODEL_TYPE}] ...")
+    # 5. Train loop
+    print(f"Starting training for model [{config.MODEL_TYPE}] ...")
     for epoch in range(start_epoch, config.NUM_EPOCHS):
         start_time = time.time()
 
@@ -144,7 +141,7 @@ def main():
             best_loss = val_loss
             save_checkpoint(model, optimizer, epoch, best_loss, config.SAVE_PATH)
 
-    print(f"✅ Huấn luyện hoàn tất. Model tốt nhất lưu tại: {config.SAVE_PATH}")
+    print(f"Training completed. Best model saved at: {config.SAVE_PATH}")
 
 
 if __name__ == "__main__":
