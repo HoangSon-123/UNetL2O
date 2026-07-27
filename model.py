@@ -1032,3 +1032,118 @@ class RED_CNN(nn.Module):
         final_output = out + x_img
         
         return final_output, x_img
+
+#-------------------------------------------------
+# 9. MODEL: LearnedPrimalDual
+#-------------------------------------------------
+class PrimalBlock(nn.Module):
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 features=32):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_channels, features, 3, padding=1),
+            nn.PReLU(),
+            nn.Conv2d(features, features, 3, padding=1),
+            nn.PReLU(),
+            nn.Conv2d(features, features, 3, padding=1),
+            nn.PReLU(),
+            nn.Conv2d(features, out_channels, 3, padding=1)
+        )
+    def forward(self, x):
+        return self.net(x)
+class DualBlock(nn.Module):
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 features=32):
+
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Conv2d(in_channels, features, 3, padding=1),
+            nn.PReLU(),
+            nn.Conv2d(features, features, 3, padding=1),
+            nn.PReLU(),
+            nn.Conv2d(features, features, 3, padding=1),
+            nn.PReLU(),
+            nn.Conv2d(features, out_channels, 3, padding=1)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+class LearnedPrimalDual(nn.Module):
+    def __init__(self, 
+                 A_matrix, 
+                 img_size=128, 
+                 n_iter=10, 
+                 n_primal=5, 
+                 n_dual=5, 
+                 features=32):
+        super().__init__()
+        
+        self.img_size = img_size
+        self.n_iter = n_iter
+        self.n_primal = n_primal
+        self.n_dual = n_dual
+        
+        self.register_buffer("A", A_matrix.float())
+        self.register_buffer("AT", A_matrix.t().float())
+        
+        self.primal_blocks = nn.ModuleList()
+        self.dual_blocks = nn.ModuleList()
+        
+        for _ in range(n_iter):
+            self.primal_blocks.append(
+                PrimalBlock(n_primal + 1, n_primal, features)
+            )
+            self.dual_blocks.append(
+                DualBlock(n_dual + 2, n_dual, features)
+            )
+
+    def forward_projection(self, x):
+        """
+        x : (B, 1, 128, 128)
+        return : (B, 1, 30, 183)
+        """
+        B = x.shape[0]
+        x = x.reshape(B, -1)
+        y = torch.matmul(x, self.AT)
+        y = y.reshape(B, 1, 30, 183)
+        return y
+
+    def back_projection(self, y):
+        """
+        y : (B, 1, 30, 183)
+        return : (B, 1, 128, 128)
+        """
+        B = y.shape[0]
+        y = y.reshape(B, -1)
+        x = torch.matmul(y, self.A)
+        x = x.reshape(B, 1, self.img_size, self.img_size)
+        return x
+
+    def forward(self, y):
+        B = y.shape[0]
+        device = y.device
+        
+        primal = torch.zeros(
+            B, self.n_primal, self.img_size, self.img_size, device=device
+        )
+        dual = torch.zeros(
+            B, self.n_dual, 30, 183, device=device
+        )
+        
+        for k in range(self.n_iter):
+            # 1. Dual Step
+            Ax = self.forward_projection(primal[:, 0:1])
+            dual_input = torch.cat([dual, Ax, y], dim=1)
+            dual = dual + self.dual_blocks[k](dual_input)
+            
+            # 2. Primal Step
+            ATy = self.back_projection(dual[:, 0:1])
+            primal_input = torch.cat([primal, ATy], dim=1)
+            primal = primal + self.primal_blocks[k](primal_input)
+            
+        return primal[:, 0:1]
