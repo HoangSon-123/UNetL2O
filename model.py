@@ -967,71 +967,70 @@ class Scale_CT_L2O_Model(ImplicitL2OModel):
 #-------------------------------------------------
 # 8. MODEL: RED-CNN
 #-------------------------------------------------
+
 class RED_CNN(nn.Module):
-    def __init__(self, A_matrix, features=64, img_size=128):
+    def __init__(self, out_ch=96):
         super(RED_CNN, self).__init__()
+        self.conv1 = nn.Conv2d(1, out_ch, kernel_size=5, stride=1, padding=0)
+        self.conv2 = nn.Conv2d(out_ch, out_ch, kernel_size=5, stride=1, padding=0)
+        self.conv3 = nn.Conv2d(out_ch, out_ch, kernel_size=5, stride=1, padding=0)
+        self.conv4 = nn.Conv2d(out_ch, out_ch, kernel_size=5, stride=1, padding=0)
+        self.conv5 = nn.Conv2d(out_ch, out_ch, kernel_size=5, stride=1, padding=0)
+
+        self.tconv1 = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=5, stride=1, padding=0)
+        self.tconv2 = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=5, stride=1, padding=0)
+        self.tconv3 = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=5, stride=1, padding=0)
+        self.tconv4 = nn.ConvTranspose2d(out_ch, out_ch, kernel_size=5, stride=1, padding=0)
+        self.tconv5 = nn.ConvTranspose2d(out_ch, 1, kernel_size=5, stride=1, padding=0)
+
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        # encoder
+        residual_1 = x
+        out = self.relu(self.conv1(x))
+        out = self.relu(self.conv2(out))
+        residual_2 = out
+        out = self.relu(self.conv3(out))
+        out = self.relu(self.conv4(out))
+        residual_3 = out
+        out = self.relu(self.conv5(out))
         
+        # decoder
+        out = self.tconv1(out)
+        out += residual_3
+        out = self.tconv2(self.relu(out))
+        out = self.tconv3(self.relu(out))
+        out += residual_2
+        out = self.tconv4(self.relu(out))
+        out = self.tconv5(self.relu(out))
+        out += residual_1
+        
+        out = self.relu(out)
+        return out
+
+class CT_Reconstruction_Pipeline(nn.Module):
+    def __init__(self, A_matrix, img_size=128):
+        super(CT_Reconstruction_Pipeline, self).__init__()
         self.img_size = img_size
-        
-        self.register_buffer('At_matrix', A_matrix.t())
-        
-        def conv_block(in_c, out_c, dilation=1):
-            pad = dilation
-            return nn.Sequential(
-                nn.Conv2d(in_c, out_c, kernel_size=3, stride=1, padding=pad, dilation=dilation),
-                nn.PReLU(out_c) 
-            )
+        self.register_buffer('A_matrix', A_matrix)
+        self.red_cnn = RED_CNN(out_ch=48)
 
-        self.conv1 = conv_block(1, features, dilation=1)
-        self.conv2 = conv_block(features, features, dilation=1)
+    def forward(self, y_obs):
+        batch_size = y_obs.shape[0]
+        y_flat = y_obs.view(batch_size, -1)
+        x_noisy_flat = torch.matmul(y_flat, self.A_matrix)
+      
+        x_noisy_img = x_noisy_flat.view(batch_size, 1, self.img_size, self.img_size)
         
-        self.conv3 = conv_block(features, features, dilation=2)
-        self.conv4 = conv_block(features, features, dilation=3)
-        self.conv5 = conv_block(features, features, dilation=2)
+        x_min = x_noisy_img.amin(dim=(2, 3), keepdim=True)
+        x_max = x_noisy_img.amax(dim=(2, 3), keepdim=True)
+        x_noisy_img = (x_noisy_img - x_min) / (x_max - x_min + 1e-8)
         
-        self.upconv1 = conv_block(features, features, dilation=1)
-        self.upconv2 = conv_block(features, features, dilation=1)
-        self.upconv3 = conv_block(features, features, dilation=1)
-        self.upconv4 = conv_block(features, features, dilation=1)
+        # Bước 4: Khử nhiễu
+        out_clean = self.red_cnn(x_noisy_img)
         
-        self.final_conv = nn.Conv2d(features, 1, kernel_size=3, stride=1, padding=1)
-
-    def forward(self, d_batch):
-        """
-        Input: d_batch (Sinogram/Signal) - shape: [Batch, C, H, W] or [Batch, N]
-        Output: Returns 2 values:
-        1. Clean CT image (outputs) - shape: [Batch, 1, 128, 128]
-        2. Raw FBP image (raw_fbp_imgs) - shape: [Batch, 1, 128, 128]
-        """
-        batch_size = d_batch.shape[0]
-        
-        y = d_batch.view(batch_size, -1).permute(1, 0)
-        
-        x_dirty_vec = torch.matmul(self.At_matrix, y)
-        
-        x_img = x_dirty_vec.permute(1, 0).view(batch_size, 1, self.img_size, self.img_size)
-        
-        x_min = x_img.amin(dim=(2,3), keepdim=True)
-        x_max = x_img.amax(dim=(2,3), keepdim=True)
-        x_img = (x_img - x_min) / (x_max - x_min + 1e-8)
-        
-        e1 = self.conv1(x_img)
-        e2 = self.conv2(e1)
-        
-        b1 = self.conv3(e2)
-        b2 = self.conv4(b1)
-        b3 = self.conv5(b2)
-        
-        d1 = self.upconv1(b3) + e2
-        d2 = self.upconv2(d1) + e1
-        d3 = self.upconv3(d2)
-        d4 = self.upconv4(d3)
-        
-        out = self.final_conv(d4)
-        
-        final_output = out + x_img
-        
-        return final_output, x_img
+        return out_clean
 
 #-------------------------------------------------
 # 9. MODEL: LearnedPrimalDual
@@ -1147,3 +1146,142 @@ class LearnedPrimalDual(nn.Module):
             primal = primal + self.primal_blocks[k](primal_input)
             
         return primal[:, 0:1]
+
+#-------------------------------------------------
+# 10. MODEL: LearnedPrimalDual
+#-------------------------------------------------
+
+def conv(in_channels, out_channels, bias=True):
+    return nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=bias)
+
+class ResBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, bias=True):
+        super(ResBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=bias)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=bias)
+
+    def forward(self, x):
+        res = x
+        out = self.conv1(x)
+        out = self.relu(out)
+        out = self.conv2(out)
+        return out + res
+
+def downsample_strideconv(in_channels, out_channels, bias=True):
+    return nn.Conv2d(in_channels, out_channels, kernel_size=2, stride=2, padding=0, bias=bias)
+
+def upsample_convtranspose(in_channels, out_channels, bias=True):
+    return nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2, padding=0, bias=bias)
+
+class DRUNet(nn.Module):
+    def __init__(self, in_nc=2, out_nc=1, nc=[64, 128, 256, 512], nb=4, bias=True):
+        """
+        in_nc=2: 
+        out_nc=1: 
+        """
+        super(DRUNet, self).__init__()
+
+        self.m_head = conv(in_nc, nc[0], bias=bias)
+
+        # Encoder (Downsample)
+        self.m_down1 = nn.Sequential(
+            *[ResBlock(nc[0], nc[0], bias=bias) for _ in range(nb)], 
+            downsample_strideconv(nc[0], nc[1], bias=bias)
+        )
+        self.m_down2 = nn.Sequential(
+            *[ResBlock(nc[1], nc[1], bias=bias) for _ in range(nb)], 
+            downsample_strideconv(nc[1], nc[2], bias=bias)
+        )
+        self.m_down3 = nn.Sequential(
+            *[ResBlock(nc[2], nc[2], bias=bias) for _ in range(nb)], 
+            downsample_strideconv(nc[2], nc[3], bias=bias)
+        )
+
+        # Bottleneck
+        self.m_body = nn.Sequential(
+            *[ResBlock(nc[3], nc[3], bias=bias) for _ in range(nb)]
+        )
+
+        # Decoder (Upsample)
+        self.m_up3 = nn.Sequential(
+            upsample_convtranspose(nc[3], nc[2], bias=bias), 
+            *[ResBlock(nc[2], nc[2], bias=bias) for _ in range(nb)]
+        )
+        self.m_up2 = nn.Sequential(
+            upsample_convtranspose(nc[2], nc[1], bias=bias), 
+            *[ResBlock(nc[1], nc[1], bias=bias) for _ in range(nb)]
+        )
+        self.m_up1 = nn.Sequential(
+            upsample_convtranspose(nc[1], nc[0], bias=bias), 
+            *[ResBlock(nc[0], nc[0], bias=bias) for _ in range(nb)]
+        )
+
+        self.m_tail = conv(nc[0], out_nc, bias=bias)
+
+    def forward(self, x, sigma):
+        """
+        x: [B, 1, H, W] 
+        sigma: [B] 
+        """
+        if not isinstance(sigma, torch.Tensor):
+            sigma = torch.tensor([sigma], dtype=x.dtype, device=x.device)
+        
+        noise_map = sigma.view(-1, 1, 1, 1).expand(x.size(0), 1, x.size(2), x.size(3))
+        
+        x0 = torch.cat((x, noise_map), dim=1)
+
+        x1 = self.m_head(x0)
+        x2 = self.m_down1(x1)
+        x3 = self.m_down2(x2)
+        x4 = self.m_down3(x3)
+        
+        x_body = self.m_body(x4)
+        
+        x_up = self.m_up3(x_body + x4)
+        x_up = self.m_up2(x_up + x3)
+        x_up = self.m_up1(x_up + x2)
+        
+        out = self.m_tail(x_up + x1)
+        return out
+
+class UnrolledPnP(nn.Module):
+    def __init__(self, A_matrix, img_size=128, num_iterations=5, nc=[16, 32, 64, 128], nb=2):
+        super(UnrolledPnP, self).__init__()
+        self.img_size = img_size
+        self.num_iterations = num_iterations
+        
+        self.register_buffer('A_matrix', A_matrix)
+        self.register_buffer('At_matrix', A_matrix.t())
+        
+        self.denoiser = DRUNet(in_nc=2, out_nc=1, nc=nc, nb=nb)
+        
+        self.raw_alphas = nn.Parameter(torch.ones(num_iterations) * -2.2)
+        
+        self.raw_sigmas = nn.Parameter(torch.linspace(-2.2, -4.6, num_iterations))
+
+    def forward(self, y_batch):
+        batch_size = y_batch.shape[0]
+        
+        y_vec = y_batch.view(batch_size, -1).permute(1, 0)
+        x_init_vec = torch.matmul(self.At_matrix, y_vec)
+        x = x_init_vec.permute(1, 0).view(batch_size, 1, self.img_size, self.img_size)
+        
+        
+        alphas_bounded = torch.sigmoid(self.raw_alphas) 
+        sigmas_bounded = torch.sigmoid(self.raw_sigmas)
+        
+        for k in range(self.num_iterations):
+            x_vec = x.view(batch_size, -1).permute(1, 0) 
+            
+            Ax = torch.matmul(self.A_matrix, x_vec)
+            
+            residual = Ax - y_vec
+            grad_vec = torch.matmul(self.At_matrix, residual)
+            grad_img = grad_vec.permute(1, 0).view(batch_size, 1, self.img_size, self.img_size)
+            
+            x_mid = x - alphas_bounded[k] * grad_img
+            x = self.denoiser(x_mid, sigmas_bounded[k])
+            
+        return x
+
