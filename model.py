@@ -1010,25 +1010,31 @@ class RED_CNN(nn.Module):
         return out
 
 class CT_Reconstruction_Pipeline(nn.Module):
-    def __init__(self, A_matrix, img_size=128):
+    def __init__(self, A_pinv, img_size=128):
+        """
+        A_pinv: Tensor [N^2, M] 
+        """
         super(CT_Reconstruction_Pipeline, self).__init__()
         self.img_size = img_size
-        self.register_buffer('A_matrix', A_matrix)
+        
+        self.register_buffer('A_pinv_T', A_pinv.T)
+        
         self.red_cnn = RED_CNN(out_ch=48)
 
     def forward(self, y_obs):
+        """
+        y_obs: shape (batch_size, 1, num_angles, detector_length) 
+               hoặc (batch_size, M)
+        """
         batch_size = y_obs.shape[0]
+        
         y_flat = y_obs.view(batch_size, -1)
-        x_noisy_flat = torch.matmul(y_flat, self.A_matrix)
-      
-        x_noisy_img = x_noisy_flat.view(batch_size, 1, self.img_size, self.img_size)
         
-        x_min = x_noisy_img.amin(dim=(2, 3), keepdim=True)
-        x_max = x_noisy_img.amax(dim=(2, 3), keepdim=True)
-        x_noisy_img = (x_noisy_img - x_min) / (x_max - x_min + 1e-8)
+        x0_flat = torch.matmul(y_flat, self.A_pinv_T)
         
-        # Bước 4: Khử nhiễu
-        out_clean = self.red_cnn(x_noisy_img)
+        x0_img = x0_flat.view(batch_size, 1, self.img_size, self.img_size)
+        
+        out_clean = self.red_cnn(x0_img)
         
         return out_clean
 
