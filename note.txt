@@ -1,2 +1,2 @@
-lodopab image eval 21
+lodopab image eval 21 index 22
 ellipses image eval 15
